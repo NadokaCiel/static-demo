@@ -1,0 +1,108 @@
+name: Nuxt Static Build & Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - stg
+      - develop
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: '构建/部署环境：dev / staging / production（可选；不填则按分支推断）'
+        required: false
+        default: ''
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_VERSION: '22.19.0'
+      MOUNT_PATH: '/Users/ciel.zhang/Desktop/nginx-static'
+      NGINX_CONTAINER: 'Ciel-Nginx'
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+      # 构建输出目录（Nuxt static preset）
+      BUILD_OUTPUT_DIR: '.output/public'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Decide build/deploy env
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 手动触发时允许传 target_env；推送触发时按分支推断
+          target="${{ github.event.inputs.target_env || '' }}"
+          if [[ -z "$target" ]]; then
+            branch="${GITHUB_REF_NAME}"
+            case "$branch" in
+              develop) target="dev" ;;
+              stg) target="staging" ;;
+              main) target="production" ;;
+              *) echo "Unsupported branch: $branch" && exit 1 ;;
+            esac
+          fi
+
+          case "$target" in
+            dev)
+              BUILD_SCRIPT="build:dev"
+              DEPLOY_SUBDIR="dev"
+              ;;
+            staging)
+              BUILD_SCRIPT="build:staging"
+              DEPLOY_SUBDIR="staging"
+              ;;
+            production)
+              BUILD_SCRIPT="build:prod"
+              DEPLOY_SUBDIR="prod"
+              ;;
+            *)
+              echo "Unsupported target_env: $target"
+              exit 1
+              ;;
+          esac
+
+          echo "TARGET_ENV=$target" >> "$GITHUB_ENV"
+          echo "BUILD_SCRIPT=$BUILD_SCRIPT" >> "$GITHUB_ENV"
+          echo "DEPLOY_SUBDIR=$DEPLOY_SUBDIR" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (Nuxt generate)
+        run: npm run "${BUILD_SCRIPT}"
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > deploy_key.pem
+          chmod 600 deploy_key.pem
+          ssh-keyscan -p "${DEPLOY_SSH_PORT}" -H "${{ secrets.DEPLOY_SSH_HOST }}" >> ~/.ssh/known_hosts || true
+
+      - name: Deploy to Nginx (rsync + reload)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REMOTE_DIR="${MOUNT_PATH}/static-demo/${DEPLOY_SUBDIR}/"
+          echo "Deploying to: ${REMOTE_DIR}"
+
+          rsync -az --delete \
+            -e "ssh -i deploy_key.pem -p ${DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no" \
+            "${BUILD_OUTPUT_DIR}/" \
+            "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}:${REMOTE_DIR}"
+
+          ssh -i deploy_key.pem -p "${DEPLOY_SSH_PORT}" -o StrictHostKeyChecking=no \
+            "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" \
+            "docker exec ${NGINX_CONTAINER} nginx -s reload"
+

@@ -111,10 +111,14 @@ pipeline {
                         deployPath = env.PROD_HTML_PATH
                     }
 
+                    if (!deployPath) {
+                        error "deployPath is empty (EFFECTIVE_ENV=${env.EFFECTIVE_ENV})"
+                    }
+
                     sh """
                         set -euxo pipefail
                         mkdir -p '${deployPath}'
-                        rm -rf '${deployPath:?}'/*
+                        rm -rf '${deployPath}'/*
                         cp -rf .output/public/* '${deployPath}/'
                         ${reloadCmd}
                     """
