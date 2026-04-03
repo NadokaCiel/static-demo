@@ -1,0 +1,33 @@
+# Mac 本地验证：Nginx 静态目录 + Jenkins（构建与 docker exec）
+# 使用方式见 README.md / CHECKLIST.md
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: demo-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ${DEMO_STATIC_ROOT:-/Users/ciel.zhang/Desktop/nginx-static}:/usr/share/nginx/html:rw
+    restart: unless-stopped
+
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: demo-jenkins
+    user: root
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      # 与 nginx 使用同一宿主目录，容器内路径均为 /usr/share/nginx/html，便于与 Jenkinsfile 中路径一致
+      - ${DEMO_STATIC_ROOT:-/Users/ciel.zhang/Desktop/nginx-static}:/usr/share/nginx/html:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  jenkins_home:

@@ -1,0 +1,113 @@
+// 与 demo/docker-compose 对齐：demo-nginx、HTML_ROOT=/usr/share/nginx/html
+// 「项目路径 + 环境」仅在本文件定义；部署时 mkdir -p 自动创建，无需在宿主手工建子目录
+
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'node22.19.0'
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(
+            name: 'REPO_URL',
+            defaultValue: 'https://github.com/NadokaCiel/static-demo.git',
+            description: '仅在单工作流（Pipeline script）时使用：仓库地址'
+        )
+        string(
+            name: 'REPO_BRANCH',
+            defaultValue: 'develop',
+            description: '仅在单工作流（Pipeline script）时使用：分支名'
+        )
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['auto', 'dev', 'staging', 'production'],
+            description: '构建环境；auto 按分支推断'
+        )
+    }
+
+    environment {
+        HTML_ROOT = '/usr/share/nginx/html'
+        PROJECT_SLUG = 'static-demo'
+        SEGMENT_DEV = 'dev'
+        SEGMENT_STAGING = 'staging'
+        SEGMENT_PROD = 'prod'
+        NGINX_CONTAINER = 'demo-nginx'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    // 兼容两种任务类型：
+                    // 1) Multibranch / Pipeline from SCM -> checkout scm
+                    // 2) 单工作流 Pipeline script -> fallback 到 git 参数
+                    try {
+                        checkout scm
+                        echo 'Checkout via scm context'
+                    } catch (err) {
+                        echo "scm context unavailable, fallback to git params: ${err.getClass().getSimpleName()}"
+                        git branch: params.REPO_BRANCH, url: params.REPO_URL
+                    }
+                }
+            }
+        }
+
+        stage('Prepare') {
+            steps {
+                sh 'rm -rf .output .nuxt'
+            }
+        }
+
+        stage('Install') {
+            steps {
+                sh 'npm ci'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                script {
+                    def branch = (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '').toString()
+                    def effectiveEnv = params.TARGET_ENV
+                    if (effectiveEnv == 'auto') {
+                        if (branch ==~ /.*develop.*/) effectiveEnv = 'dev'
+                        else if (branch ==~ /.*stg.*/) effectiveEnv = 'staging'
+                        else if (branch ==~ /.*main.*/) effectiveEnv = 'production'
+                        else effectiveEnv = 'dev'
+                    }
+                    env.EFFECTIVE_ENV = effectiveEnv
+                    echo "Effective env: ${env.EFFECTIVE_ENV}"
+                    if (env.EFFECTIVE_ENV == 'dev') sh 'npm run build:dev'
+                    else if (env.EFFECTIVE_ENV == 'staging') sh 'npm run build:staging'
+                    else sh 'npm run build:prod'
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                script {
+                    def seg = ''
+                    if (env.EFFECTIVE_ENV == 'dev') seg = env.SEGMENT_DEV
+                    else if (env.EFFECTIVE_ENV == 'staging') seg = env.SEGMENT_STAGING
+                    else seg = env.SEGMENT_PROD
+                    def deployPath = "${env.HTML_ROOT}/${env.PROJECT_SLUG}/${seg}"
+                    def nginxContainer = env.NGINX_CONTAINER
+                    sh """
+                        set -euxo pipefail
+                        mkdir -p '${deployPath}'
+                        rm -rf '${deployPath}'/*
+                        cp -rf .output/public/* '${deployPath}/'
+                        docker exec ${nginxContainer} nginx -s reload
+                    """
+                }
+            }
+        }
+    }
+}

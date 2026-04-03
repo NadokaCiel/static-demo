@@ -1,0 +1,11 @@
+# 本地可行性验证用：在官方 Jenkins 镜像中安装 Docker CLI，便于执行 docker exec reload
+# 仅用于 demo，勿直接用于生产
+FROM jenkins/jenkins:lts-jdk17
+
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends docker.io \
+  && rm -rf /var/lib/apt/lists/*
+
+# 与 docker-compose 中 user: root 配合，避免 jenkins 用户与宿主机 docker.sock 权限不一致
+USER root

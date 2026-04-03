@@ -19,8 +19,8 @@ jobs:
 
     env:
       NODE_VERSION: '22.19.0'
-      MOUNT_PATH: '/Users/ciel.zhang/Desktop/nginx-static'
-      NGINX_CONTAINER: 'Ciel-Nginx'
+      MOUNT_PATH: '/vol1/1000/dev/docker/nginx/html'
+      NGINX_CONTAINER: 'nginx'
       DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
       # 构建输出目录（Nuxt static preset）
       BUILD_OUTPUT_DIR: '.output/public'
