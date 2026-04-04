@@ -41,7 +41,6 @@ pipeline {
                             props[k] = v
                         }
                     }
-                    env.HTML_ROOT = props.HTML_ROOT
                     env.PROJECT_SLUG = props.PROJECT_SLUG
                     // SEGMENT 允许不填：默认按 dev / staging / prod 映射
                     env.SEGMENT_DEV = (props.get('SEGMENT_DEV') ?: 'dev').toString()
@@ -169,8 +168,7 @@ pipeline {
                     } else {
                         seg = env.SEGMENT_PROD
                     }
-                    
-                    // 关键修改：将 HTML_ROOT 替换为 SHARED_BASE_PATH
+
                     def deployPath = "${env.SHARED_BASE_PATH}/${env.PROJECT_SLUG}/${seg}"
                     def reloadCmd = "docker exec ${env.NGINX_CONTAINER} nginx -s reload"
                     
