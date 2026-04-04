@@ -52,8 +52,12 @@ pipeline {
                     env.DOCKER_IMAGE_PREFIX = props.DOCKER_IMAGE_PREFIX
                     env.ALLOWED_BRANCHES = (props.get('ALLOWED_BRANCHES') ?: 'develop,stg,main').toString()
                     env.DOCKER_BUILD_TAG = "${props.DOCKER_IMAGE_PREFIX}-${env.BUILD_NUMBER}"
+                    
+                    // 新增：共享目录基础路径配置
+                    env.SHARED_BASE_PATH = props.get('SHARED_BASE_PATH') ?: '/vol1/1000/dev/docker/shared'
+                    
                     env.SKIP_PIPELINE = 'false'
-                    echo "jenkins.properties: NODE_VERSION=${env.NODE_VERSION}, PROJECT_SLUG=${env.PROJECT_SLUG}"
+                    echo "jenkins.properties: NODE_VERSION=${env.NODE_VERSION}, PROJECT_SLUG=${env.PROJECT_SLUG}, SHARED_BASE_PATH=${env.SHARED_BASE_PATH}"
                 }
             }
         }
@@ -61,7 +65,7 @@ pipeline {
         stage('BranchGuard') {
             steps {
                 script {
-                    // webhook/触发器只负责“进来”，最终是否构建由这里兜底限制：
+                    // webhook/触发器只负责"进来"，最终是否构建由这里兜底限制：
                     // 仅当 push 到 develop/stg/main（或 PR 合并后的目标分支）时才真正执行流水线。
                     def rawBranch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').toString()
                     def branch = rawBranch
@@ -165,18 +169,37 @@ pipeline {
                     } else {
                         seg = env.SEGMENT_PROD
                     }
-                    def deployPath = "${env.HTML_ROOT}/${env.PROJECT_SLUG}/${seg}"
+                    
+                    // 关键修改：将 HTML_ROOT 替换为 SHARED_BASE_PATH
+                    def deployPath = "${env.SHARED_BASE_PATH}/${env.PROJECT_SLUG}/${seg}"
                     def reloadCmd = "docker exec ${env.NGINX_CONTAINER} nginx -s reload"
+                    
+                    // 新增：计算在 Nginx 容器内的对应路径
+                    def nginxInternalPath = "/usr/share/nginx/html/${env.PROJECT_SLUG}/${seg}"
 
                     sh """
                         set -euxo pipefail
+                        
+                        # 1. 创建并清理目标目录（保持原有逻辑）
                         mkdir -p '${deployPath}'
                         rm -rf '${deployPath}'/*
-                        cp -rf .output/public/* '${deployPath}/'
+                        
+                        # 2. 复制构建产物到共享目录的目标路径
+                        cp -rf .output/public/* '${deployPath}'/
+                        
+                        # 3. 验证文件已正确复制
+                        echo "=== 共享目录中的文件 ==="
+                        ls -la '${deployPath}'/
+                        
+                        echo "=== Nginx 容器内的对应路径 ==="
+                        docker exec ${env.NGINX_CONTAINER} ls -la '${nginxInternalPath}'/
+                        
+                        # 4. 重载 Nginx
                         ${reloadCmd}
                     """
 
                     echo "Deploy ${env.EFFECTIVE_ENV} to ${deployPath}"
+                    echo "Nginx 容器内对应路径: ${nginxInternalPath}"
                 }
             }
         }
