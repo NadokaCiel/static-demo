@@ -189,12 +189,40 @@ pipeline {
                         # 3. 验证文件已正确复制
                         echo "=== 共享目录中的文件 ==="
                         ls -la '${deployPath}'/
+
+                        # 3. 设置正确的文件权限（关键修改！）
+                        echo "设置文件权限..."
                         
-                        echo "=== Nginx 容器内的对应路径 ==="
+                        # 方案A：为Web服务器设置标准权限
+                        find '${deployPath}' -type d -exec chmod 755 {} \\;
+                        find '${deployPath}' -type f -exec chmod 644 {} \\;
+                        
+                        # 方案B：如果您需要更严格的权限
+                        # find '${deployPath}' -type d -exec chmod 750 {} \\;
+                        # find '${deployPath}' -type f -exec chmod 640 {} \\;
+                        
+                        # 4. 验证权限设置
+                        echo "=== 权限设置结果 ==="
+                        echo "目录权限:"
+                        ls -la '${deployPath}'/
+                        
+                        echo "详细权限统计:"
+                        find '${deployPath}' -type f -name "*.html" | head -5 | xargs ls -la
+                        
+                        # 5. 验证文件在宿主机和Nginx容器内的可访问性
+                        echo "=== 在宿主机上测试文件访问 ==="
+                        ls -la '${deployPath}'/index.html
+                        
+                        echo "=== 在Nginx容器内测试文件访问 ==="
                         docker exec ${env.NGINX_CONTAINER} ls -la '${nginxInternalPath}'/
                         
-                        # 4. 重载 Nginx
+                        # 模拟Nginx用户访问文件
+                        docker exec ${env.NGINX_CONTAINER} cat '${nginxInternalPath}'/index.html 2>/dev/null && echo "✓ Nginx可访问文件" || echo "⚠ 注意：Nginx可能无法访问文件"
+                        
+                        # 6. 重载 Nginx
                         ${reloadCmd}
+                        
+                        echo "权限设置完成"
                     """
 
                     echo "Deploy ${env.EFFECTIVE_ENV} to ${deployPath}"
