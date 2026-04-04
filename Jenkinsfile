@@ -53,7 +53,7 @@ pipeline {
                     env.DOCKER_BUILD_TAG = "${props.DOCKER_IMAGE_PREFIX}-${env.BUILD_NUMBER}"
                     
                     // 新增：共享目录基础路径配置
-                    env.SHARED_BASE_PATH = props.get('SHARED_BASE_PATH') ?: '/vol1/1000/dev/docker/shared'
+                    env.SHARED_BASE_PATH = props.SHARED_VOLUME_PATH
                     
                     env.SKIP_PIPELINE = 'false'
                     echo "jenkins.properties: NODE_VERSION=${env.NODE_VERSION}, PROJECT_SLUG=${env.PROJECT_SLUG}, SHARED_BASE_PATH=${env.SHARED_BASE_PATH}"
@@ -183,8 +183,8 @@ pipeline {
                         rm -rf '${deployPath}'/*
                         
                         # 2. 复制构建产物到共享目录的目标路径
-                        # cp -rf .output/public/* '${deployPath}'/
-                        (cd .output/public && tar -cf - .) | (cd '${deployPath}' && tar -xf -)
+                        cp -rf .output/public/* '${deployPath}'/
+                        # (cd .output/public && tar -cf - .) | (cd '${deployPath}' && tar -xf -)
                         
                         # 3. 验证文件已正确复制
                         echo "=== 共享目录中的文件 ==="
