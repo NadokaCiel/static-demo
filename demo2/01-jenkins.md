@@ -199,4 +199,4 @@ ssh-keygen -t ed25519 -C "jenkins-nas-static" -f ~/.ssh/jenkins_github_ed25519 -
 如果你启用了 webhook，但仍希望“只对 develop/stg/main 执行”，则无需在 Jenkins UI 再做复杂过滤：模板已在 `BranchGuard` 兜底。
 
 
-docker run -d --name jenkins --restart=unless-stopped -p 8083:8080 -p 50000:50000 -v /vol1/1000/dev/docker/jenkins:/var/jenkins_home -v /var/run/docker.sock:/var/run/docker.sock -v $(which docker):/usr/bin/docker:ro jenkins/jenkins:latest
+docker run -d --name jenkins --restart=unless-stopped -p 8083:8080 -p 50000:50000 -u 1000:1000 -v /vol1/1000/dev/docker/jenkins:/var/jenkins_home -v /var/run/docker.sock:/var/run/docker.sock -v $(which docker):/usr/bin/docker:ro  jenkins/jenkins:latest

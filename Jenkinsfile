@@ -185,7 +185,8 @@ pipeline {
                         rm -rf '${deployPath}'/*
                         
                         # 2. 复制构建产物到共享目录的目标路径
-                        cp -rf .output/public/* '${deployPath}'/
+                        # cp -rf .output/public/* '${deployPath}'/
+                        (cd .output/public && tar -cf - .) | (cd '${deployPath}' && tar -xf -)
                         
                         # 3. 验证文件已正确复制
                         echo "=== 共享目录中的文件 ==="
