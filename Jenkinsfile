@@ -1,10 +1,8 @@
+// 母版：仅支持 Pipeline script from SCM
+// 变量集中在仓库根目录 jenkins.properties（见 jenkins.properties.example）
+
 pipeline {
     agent any
-
-    tools {
-        // 对应 Jenkins 中配置的 Node 版本名称（请按你的 Jenkins 里实际的 tool 名称改这里）
-        nodejs 'node22.19.0'
-    }
 
     options {
         timestamps()
@@ -15,23 +13,8 @@ pipeline {
         choice(
             name: 'TARGET_ENV',
             choices: ['auto', 'dev', 'staging', 'production'],
-            description: '构建环境：auto 按分支推断；也可手动指定 dev/staging/production'
+            description: '构建环境：auto 按分支推断'
         )
-    }
-
-    // ===== 以下仅由「本仓库」维护：项目名 + 各环境子路径；与 .env 中 NUXT_PUBLIC_BASE_URL 一致 =====
-    // Jenkins 全局不应写死业务目录；其它项目请复制本文件并只改本节 + NGINX_CONTAINER / HTML_ROOT（若挂载不同）
-    environment {
-        // Nginx 容器内静态根（与挂载到容器的 html 目录一致）
-        HTML_ROOT = '/usr/share/nginx/html'
-        // 本项目在 URL / 磁盘上的路径段（如 baseURL 为 /static-demo/dev/ 时此处为 static-demo）
-        PROJECT_SLUG = 'static-demo'
-        // 各环境下挂在 PROJECT_SLUG 后的目录名（可按项目自定义，如 stg、preview 等）
-        SEGMENT_DEV = 'dev'
-        SEGMENT_STAGING = 'staging'
-        SEGMENT_PROD = 'prod'
-
-        NGINX_CONTAINER = 'nginx'
     }
 
     stages {
@@ -41,7 +24,77 @@ pipeline {
             }
         }
 
+        stage('LoadJenkinsProperties') {
+            steps {
+                script {
+                    def text = readFile(encoding: 'UTF-8', file: 'jenkins.properties')
+                    def props = [:]
+                    text.split('\n').each { raw ->
+                        def line = raw.trim()
+                        if (!line || line.startsWith('#')) {
+                            return
+                        }
+                        def idx = line.indexOf('=')
+                        if (idx > 0) {
+                            def k = line.substring(0, idx).trim()
+                            def v = line.substring(idx + 1).trim()
+                            props[k] = v
+                        }
+                    }
+                    env.HTML_ROOT = props.HTML_ROOT
+                    env.PROJECT_SLUG = props.PROJECT_SLUG
+                    // SEGMENT 允许不填：默认按 dev / staging / prod 映射
+                    env.SEGMENT_DEV = (props.get('SEGMENT_DEV') ?: 'dev').toString()
+                    env.SEGMENT_STAGING = (props.get('SEGMENT_STAGING') ?: 'staging').toString()
+                    env.SEGMENT_PROD = (props.get('SEGMENT_PROD') ?: 'prod').toString()
+                    env.NGINX_CONTAINER = props.NGINX_CONTAINER
+                    env.NODE_VERSION = props.NODE_VERSION
+                    env.DOCKER_IMAGE_PREFIX = props.DOCKER_IMAGE_PREFIX
+                    env.ALLOWED_BRANCHES = (props.get('ALLOWED_BRANCHES') ?: 'develop,stg,main').toString()
+                    env.DOCKER_BUILD_TAG = "${props.DOCKER_IMAGE_PREFIX}-${env.BUILD_NUMBER}"
+                    env.SKIP_PIPELINE = 'false'
+                    echo "jenkins.properties: NODE_VERSION=${env.NODE_VERSION}, PROJECT_SLUG=${env.PROJECT_SLUG}"
+                }
+            }
+        }
+
+        stage('BranchGuard') {
+            steps {
+                script {
+                    // webhook/触发器只负责“进来”，最终是否构建由这里兜底限制：
+                    // 仅当 push 到 develop/stg/main（或 PR 合并后的目标分支）时才真正执行流水线。
+                    def rawBranch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').toString()
+                    def branch = rawBranch
+                    branch = branch.replaceAll('^origin/', '')
+                    branch = branch.replaceAll('^refs/heads/', '')
+                    def allowed = env.ALLOWED_BRANCHES
+                            .split(',')
+                            .collect { it.trim() }
+                            .findAll { it }
+
+                    if (!branch) {
+                        echo "BranchGuard: 无法识别分支（raw=${rawBranch}），将跳过构建。"
+                        env.SKIP_PIPELINE = 'true'
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+
+                    if (!allowed.contains(branch)) {
+                        echo "BranchGuard: 分支 ${branch} 不在允许列表 ${allowed} 内，将跳过构建。"
+                        env.SKIP_PIPELINE = 'true'
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+
+                    echo "BranchGuard: 分支 ${branch} 允许，继续执行。"
+                }
+            }
+        }
+
         stage('Prepare') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
                 sh '''
                     set -euxo pipefail
@@ -50,27 +103,21 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                    set -euxo pipefail
-                    npm ci
-                '''
-            }
-        }
-
         stage('Build') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
                 script {
                     def branch = (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '').toString()
                     def effectiveEnv = params.TARGET_ENV
 
                     if (effectiveEnv == 'auto') {
-                        if (branch ==~ /.*develop.*/ ) {
+                        if (branch ==~ /.*develop.*/) {
                             effectiveEnv = 'dev'
-                        } else if (branch ==~ /.*stg.*/ ) {
+                        } else if (branch ==~ /.*stg.*/) {
                             effectiveEnv = 'staging'
-                        } else if (branch ==~ /.*main.*/ ) {
+                        } else if (branch ==~ /.*main.*/) {
                             effectiveEnv = 'production'
                         } else {
                             effectiveEnv = 'dev'
@@ -80,18 +127,34 @@ pipeline {
                     env.EFFECTIVE_ENV = effectiveEnv
                     echo "Effective env: ${env.EFFECTIVE_ENV}"
 
+                    def npmScript = 'build:prod'
                     if (env.EFFECTIVE_ENV == 'dev') {
-                        sh 'npm run build:dev'
+                        npmScript = 'build:dev'
                     } else if (env.EFFECTIVE_ENV == 'staging') {
-                        sh 'npm run build:staging'
-                    } else {
-                        sh 'npm run build:prod'
+                        npmScript = 'build:staging'
                     }
+
+                    sh """
+                        set -euxo pipefail
+                        docker build -f Dockerfile -t ${env.DOCKER_BUILD_TAG} \\
+                          --build-arg NODE_VERSION=${env.NODE_VERSION} \\
+                          --build-arg NPM_SCRIPT=${npmScript} \\
+                          .
+                        cid=\$(docker create ${env.DOCKER_BUILD_TAG})
+                        mkdir -p .output
+                        docker cp \$cid:/app/.output/public/. .output/public/
+                        docker rm \$cid
+                        # 清理临时构建镜像：避免长期占用磁盘
+                        docker rmi -f ${env.DOCKER_BUILD_TAG} >/dev/null 2>&1 || true
+                    """
                 }
             }
         }
 
         stage('Deploy') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
                 script {
                     def seg = ''
